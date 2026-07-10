@@ -7,7 +7,7 @@
 set -eu
 
 readonly REPOSITORY="XTLS/Xray-core"
-readonly SCRIPT_VERSION="1.2.2"
+readonly SCRIPT_VERSION="1.2.3"
 readonly XRAY_HOME="/opt/xray"
 readonly INSTALL_DIR="${XRAY_HOME}/bin"
 readonly CONFIG_DIR="${XRAY_HOME}"
@@ -195,6 +195,7 @@ parse_client() {
     uuid=$(printf '%s' "${item}" | cut -d: -f2)
     outbound=$(printf '%s' "${item}" | cut -d: -f3)
     client_port=$(printf '%s' "${item}" | cut -d: -f4)
+    [ "${outbound}" != "block" ] || outbound=blocked
 
     valid_email "${email}" || fatal "客户端标识无效：${email}"
     valid_tag "${outbound}" || fatal "客户端 ${email} 的出站标签无效"
@@ -251,6 +252,7 @@ parse_route() {
     [ "${fields}" -eq 2 ] || fatal "--route 格式应为 EMAIL:OUTBOUND"
     email=$(printf '%s' "${item}" | cut -d: -f1)
     outbound=$(printf '%s' "${item}" | cut -d: -f2)
+    [ "${outbound}" != "block" ] || outbound=blocked
     valid_email "${email}" || fatal "路由客户端标识无效：${email}"
     valid_tag "${outbound}" || fatal "路由出站标签无效：${outbound}"
     printf '%s|%s\n' "${email}" "${outbound}" >>"${ROUTES_FILE}"
@@ -338,7 +340,7 @@ interactive_config() {
         email=$(prompt_default "客户端标识" "${default_email}")
         uuid=$(prompt_default "客户端 UUID（auto 表示自动生成）" "auto")
         client_port=$(prompt_default "客户端端口" "${PORT}")
-        outbound=$(prompt_default "出站标签（direct、block 或 SOCKS 标签）" "direct")
+        outbound=$(prompt_default "出站标签（direct、blocked 或 SOCKS 标签）" "direct")
         parse_client "${email}:${uuid}:${outbound}:${client_port}"
         client_index=$((client_index + 1))
         if prompt_yes_no "是否继续添加客户端" "n"; then
@@ -351,7 +353,7 @@ interactive_config() {
 
 outbound_exists() {
     tag=$1
-    [ "${tag}" = "direct" ] || [ "${tag}" = "block" ] ||
+    [ "${tag}" = "direct" ] || [ "${tag}" = "blocked" ] ||
         awk -F'|' -v tag="${tag}" '$1 == tag { found=1 } END { exit found ? 0 : 1 }' "${SOCKS_FILE}"
 }
 
@@ -558,12 +560,18 @@ if [ "${MODE}" = "generate" ]; then
     {
         cat <<EOF
 {
-  "log": {
-    "loglevel": "warning",
-    "access": "${LOG_DIR}/access.log",
-    "error": "${LOG_DIR}/error.log"
+  "api": {
+    "services": [ "HandlerService", "LoggerService", "StatsService", "RoutingService" ],
+    "tag": "api"
   },
   "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 62789,
+      "protocol": "tunnel",
+      "settings": { "rewriteAddress": "127.0.0.1" },
+      "tag": "api"
+    },
 EOF
         first_port=1
         awk -F'|' '$4 != "" { print $4 }' "${CLIENTS_FILE}" | sort -n | uniq |
@@ -573,7 +581,7 @@ EOF
                 first_port=0
                 cat <<EOF
     {
-      "tag": "vless-reality-${client_port}",
+      "tag": "inbound-${client_port}",
       "listen": "$(json_escape "${LISTEN}")",
       "port": ${client_port},
       "protocol": "vless",
@@ -591,7 +599,8 @@ EOF
                 cat <<EOF
 
         ],
-        "decryption": "none"
+        "decryption": "none",
+        "testseed": [ 900, 500, 900, 256 ]
       },
       "streamSettings": {
         "network": "tcp",
@@ -600,20 +609,41 @@ EOF
           "show": false,
           "target": "$(json_escape "${DEST}")",
           "xver": 0,
+          "maxClientVer": "",
+          "maxTimediff": 0,
+          "minClientVer": "",
+          "mldsa65Seed": "",
           "serverNames": [ $(json_string_array_csv "${SERVER_NAMES}") ],
           "privateKey": "$(json_escape "${PRIVATE_KEY}")",
           "shortIds": [ "$(json_escape "${SHORT_ID}")" ]
+        },
+        "tcpSettings": {
+          "acceptProxyProtocol": false,
+          "header": { "type": "none" }
         }
       },
       "sniffing": {
-        "enabled": true,
-        "destOverride": [ "http", "tls", "quic" ]
+        "destOverride": [ "http", "tls", "quic", "fakedns" ],
+        "enabled": false,
+        "metadataOnly": false,
+        "routeOnly": false
       }
     }
 EOF
             done
         cat <<EOF
   ],
+  "log": {
+    "access": "none",
+    "dnsLog": false,
+    "error": "",
+    "loglevel": "warning",
+    "maskAddress": ""
+  },
+  "metrics": {
+    "listen": "127.0.0.1:11111",
+    "tag": "metrics_out"
+  },
   "outbounds": [
 EOF
         first_outbound=1
@@ -626,29 +656,69 @@ EOF
       "tag": "$(json_escape "${tag}")",
       "protocol": "socks",
       "settings": {
-        "address": "$(json_escape "${host}")",
-        "port": ${socks_port}
+        "servers": [
+          {
+            "address": "$(json_escape "${host}")",
+            "port": ${socks_port}
 EOF
             if [ -n "${user}" ]; then
                 cat <<EOF
-        ,
-        "user": "$(json_escape "${user}")",
-        "pass": "$(json_escape "${password}")"
+            ,
+            "users": [
+              {
+                "user": "$(json_escape "${user}")",
+                "pass": "$(json_escape "${password}")"
+              }
+            ]
 EOF
             fi
             cat <<EOF
+          }
+        ]
       }
     }
 EOF
         done <"${SOCKS_FILE}"
         [ "${first_outbound}" -eq 1 ] || printf ',\n'
         cat <<EOF
-    { "tag": "direct", "protocol": "freedom" },
-    { "tag": "block", "protocol": "blackhole" }
+    {
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "AsIs",
+        "finalRules": [ { "action": "allow" } ]
+      },
+      "tag": "direct"
+    },
+    { "protocol": "blackhole", "settings": {}, "tag": "blocked" }
   ],
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserDownlink": true,
+        "statsUserOnline": true,
+        "statsUserUplink": true
+      }
+    },
+    "system": {
+      "statsInboundDownlink": true,
+      "statsInboundUplink": true,
+      "statsOutboundDownlink": false,
+      "statsOutboundUplink": false
+    }
+  },
   "routing": {
     "domainStrategy": "AsIs",
     "rules": [
+      {
+        "inboundTag": [ "api" ],
+        "outboundTag": "api",
+        "type": "field"
+      },
+      {
+        "ip": [ "geoip:private" ],
+        "outboundTag": "blocked",
+        "type": "field"
+      },
 EOF
         first_rule=1
         while IFS='|' read -r email outbound; do
@@ -657,6 +727,7 @@ EOF
             first_rule=0
             cat <<EOF
       {
+        "inboundTag": [ "inbound-$(awk -F'|' -v email="${email}" '$1 == email { print $4; exit }' "${CLIENTS_FILE}")" ],
         "type": "field",
         "user": [ "$(json_escape "${email}")" ],
         "outboundTag": "$(json_escape "${outbound}")"
@@ -668,10 +739,11 @@ EOF
       {
         "type": "field",
         "protocol": [ "bittorrent" ],
-        "outboundTag": "block"
+        "outboundTag": "blocked"
       }
     ]
-  }
+  },
+  "stats": {}
 }
 EOF
     } >"${GENERATED_CONFIG}"
