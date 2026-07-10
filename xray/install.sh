@@ -7,7 +7,7 @@
 set -eu
 
 readonly REPOSITORY="XTLS/Xray-core"
-readonly SCRIPT_VERSION="1.2.1"
+readonly SCRIPT_VERSION="1.2.2"
 readonly XRAY_HOME="/opt/xray"
 readonly INSTALL_DIR="${XRAY_HOME}/bin"
 readonly CONFIG_DIR="${XRAY_HOME}"
@@ -31,6 +31,8 @@ PORT=${PORT:-}
 SERVER_NAMES=${SERVER_NAMES:-${SERVER_NAME:-www.oracle.com,oracle.com}}
 DEST=${DEST:-www.oracle.com:443}
 SHORT_ID=${SHORT_ID:-}
+PRIVATE_KEY_INPUT=${PRIVATE_KEY_INPUT:-}
+PUBLIC_KEY_INPUT=${PUBLIC_KEY_INPUT:-}
 GENERATION_OPTIONS=0
 MODE=""
 TMP_DIR=""
@@ -90,6 +92,8 @@ usage() {
   --server-name DOMAIN[,DOMAIN]  Reality serverNames
   --dest HOST:PORT               Reality 目标地址
   --short-id HEX                 Reality shortId；默认随机生成
+  --private-key BASE64           Reality 私钥（与 --public-key 配合使用）
+  --public-key BASE64            Reality 公钥（与 --private-key 配合使用）
   --socks TAG:HOST:PORT[:USER:PASS]
                                  添加 SOCKS 出站
   --client EMAIL:UUID:OUTBOUND[:PORT]
@@ -302,6 +306,13 @@ interactive_config() {
     primary_name=$(printf '%s' "${SERVER_NAMES}" | cut -d, -f1)
     DEST=$(prompt_default "Reality 目标地址" "${primary_name}:443")
     SHORT_ID=$(prompt_default "Reality shortId（留空自动生成）" "")
+    if [ -n "${SHORT_ID}" ]; then
+        PRIVATE_KEY_INPUT=$(prompt_default "Reality 私钥（留空自动生成新密钥对）" "")
+        if [ -n "${PRIVATE_KEY_INPUT}" ]; then
+            PUBLIC_KEY_INPUT=$(prompt_default "Reality 公钥" "")
+            [ -n "${PUBLIC_KEY_INPUT}" ] || fatal "提供了私钥，必须同时提供公钥"
+        fi
+    fi
 
     while prompt_yes_no "是否添加 SOCKS 出站" "n"; do
         tag=$(prompt_default "SOCKS 标签" "proxy")
@@ -423,7 +434,7 @@ while [ "$#" -gt 0 ]; do
             START_SERVICE=0
             shift
             ;;
-        --port | --listen | --server-name | --sni | --dest | --short-id | --client | --vless | --vless-client | --reality-client | --socks | --route)
+        --port | --listen | --server-name | --sni | --dest | --short-id | --private-key | --public-key | --client | --vless | --vless-client | --reality-client | --socks | --route)
             option=$1
             require_value "$@"
             value=$2
@@ -434,6 +445,8 @@ while [ "$#" -gt 0 ]; do
                 --server-name | --sni) SERVER_NAMES=${value} ;;
                 --dest) DEST=${value} ;;
                 --short-id) SHORT_ID=${value} ;;
+                --private-key) PRIVATE_KEY_INPUT=${value} ;;
+                --public-key) PUBLIC_KEY_INPUT=${value} ;;
                 --client) parse_client "${value}" ;;
                 --vless | --vless-client | --reality-client) parse_vless "${value}" ;;
                 --socks) parse_socks "${value}" ;;
@@ -519,13 +532,27 @@ unzip -q "${TMP_DIR}/${ASSET}" -d "${TMP_DIR}/unpack"
 [ -x "${TMP_DIR}/unpack/xray" ] || fatal "安装包内缺少 xray 可执行文件"
 
 if [ "${MODE}" = "generate" ]; then
-    info "生成 Reality 密钥和 Xray 配置"
-    key_output=$("${TMP_DIR}/unpack/xray" x25519)
-    PRIVATE_KEY=$(printf '%s\n' "${key_output}" |
-        awk -F': ' '/^(Private key|PrivateKey):/ { print $2; exit }')
-    PUBLIC_KEY=$(printf '%s\n' "${key_output}" |
-        awk -F': ' '/^(Public key|Password \(PublicKey\)):/ { print $2; exit }')
-    [ -n "${PRIVATE_KEY}" ] && [ -n "${PUBLIC_KEY}" ] || fatal "无法生成 Reality 密钥"
+    # 校验外部传入的密钥：--private-key 与 --public-key 必须同时提供，或同时省略
+    if [ -n "${PRIVATE_KEY_INPUT}" ] && [ -z "${PUBLIC_KEY_INPUT}" ]; then
+        fatal "--private-key 与 --public-key 必须同时提供"
+    fi
+    if [ -z "${PRIVATE_KEY_INPUT}" ] && [ -n "${PUBLIC_KEY_INPUT}" ]; then
+        fatal "--public-key 与 --private-key 必须同时提供"
+    fi
+
+    if [ -n "${PRIVATE_KEY_INPUT}" ]; then
+        info "使用外部提供的 Reality 密钥对，生成 Xray 配置"
+        PRIVATE_KEY=${PRIVATE_KEY_INPUT}
+        PUBLIC_KEY=${PUBLIC_KEY_INPUT}
+    else
+        info "生成 Reality 密钥和 Xray 配置"
+        key_output=$("${TMP_DIR}/unpack/xray" x25519)
+        PRIVATE_KEY=$(printf '%s\n' "${key_output}" |
+            awk -F': ' '/^(Private key|PrivateKey):/ { print $2; exit }')
+        PUBLIC_KEY=$(printf '%s\n' "${key_output}" |
+            awk -F': ' '/^(Public key|Password \(PublicKey\)):/ { print $2; exit }')
+        [ -n "${PRIVATE_KEY}" ] && [ -n "${PUBLIC_KEY}" ] || fatal "无法生成 Reality 密钥"
+    fi
     GENERATED_CONFIG="${TMP_DIR}/config.generated.json"
 
     {
