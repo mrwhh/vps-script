@@ -16,7 +16,7 @@
 在 VPS 上可以先进入 `config.json` 所在目录，再通过 `curl` 或 `wget` 下载脚本：
 
 ```sh
-cd /path/to/xray
+mkdir -p /opt/xray && cd /opt/xray
 curl -fL -o install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh
 # 或：wget -O install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh
 chmod +x install.sh
@@ -36,7 +36,7 @@ chmod +x install.sh
 也可以显式指定其他配置文件：
 
 ```sh
-./install.sh --config /path/to/config.json
+./install.sh --config /opt/xray/config.json
 ```
 
 配置文件模式会先使用刚下载的 Xray 内核校验配置，校验成功后才会部署。已有配置
