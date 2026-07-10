@@ -23,6 +23,7 @@ CONFIG_EXPLICIT=0
 [ -z "${XRAY_CONFIG+x}" ] || CONFIG_EXPLICIT=1
 
 START_SERVICE=${XRAY_START_SERVICE:-1}
+XRAY_WAS_RUNNING=0
 VERSION_REQUEST=${XRAY_VERSION:-latest}
 LISTEN=${LISTEN:-0.0.0.0}
 PORT=${PORT:-}
@@ -268,6 +269,18 @@ prompt_yes_no() {
     done
 }
 
+confirm_reinstall_if_running() {
+    if [ -x "${SERVICE_FILE}" ] && rc-service xray status >/dev/null 2>&1; then
+        info "检测到 Xray 实例正在运行"
+        if ! prompt_yes_no "是否重新安装 Xray" "n"; then
+            info "已取消重新安装，现有 Xray 实例保持运行"
+            exit 0
+        fi
+        info "已确认重新安装 Xray"
+        XRAY_WAS_RUNNING=1
+    fi
+}
+
 interactive_config() {
     info "未找到 config.json，进入交互配置"
     LISTEN=$(prompt_default "监听地址" "${LISTEN}")
@@ -425,6 +438,8 @@ done
 [ "${START_SERVICE}" = "0" ] || [ "${START_SERVICE}" = "1" ] || fatal "XRAY_START_SERVICE 只能是 0 或 1"
 [ "$(id -u)" -eq 0 ] || fatal "请使用 root 用户运行此脚本"
 [ -f /etc/alpine-release ] || fatal "仅支持 Alpine Linux"
+
+confirm_reinstall_if_running
 
 if [ -r "${CONFIG_SOURCE}" ]; then
     [ "${GENERATION_OPTIONS}" -eq 0 ] || fatal "检测到 config.json 时不能同时使用配置生成参数"
@@ -637,6 +652,15 @@ if [ -f "${CONFIG_FILE}" ]; then
     fi
 fi
 
+if [ "${XRAY_WAS_RUNNING}" = "1" ]; then
+    info "停止现有 Xray 实例"
+    rc-service xray stop
+    if [ "${CONFIG_EXPLICIT}" = "0" ] && [ -f "${CONFIG_FILE}" ]; then
+        info "未指定配置文件，清理现有 Xray 配置"
+        rm -f "${CONFIG_FILE}"
+    fi
+fi
+
 install -m 0755 "${TMP_DIR}/unpack/xray" "${XRAY_BIN}"
 for data_file in geoip.dat geosite.dat; do
     [ ! -f "${TMP_DIR}/unpack/${data_file}" ] || install -m 0644 "${TMP_DIR}/unpack/${data_file}" "${DATA_DIR}/${data_file}"
@@ -678,6 +702,10 @@ if ! XRAY_LOCATION_ASSET="${DATA_DIR}" "${XRAY_BIN}" run -test -config "${CONFIG
         install -m 0600 "${TMP_DIR}/config.previous" "${CONFIG_FILE}"
     else
         rm -f "${CONFIG_FILE}"
+    fi
+    if [ "${XRAY_WAS_RUNNING}" = "1" ]; then
+        info "重新启动已恢复的 Xray 实例"
+        rc-service xray start || true
     fi
     fatal "部署后的最终校验失败，已恢复原有内核和配置"
 fi
