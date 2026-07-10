@@ -7,7 +7,7 @@
 set -eu
 
 readonly REPOSITORY="XTLS/Xray-core"
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="1.2.1"
 readonly XRAY_HOME="/opt/xray"
 readonly INSTALL_DIR="${XRAY_HOME}/bin"
 readonly CONFIG_DIR="${XRAY_HOME}"
@@ -729,11 +729,9 @@ fi
 rc-update add xray default >/dev/null
 if [ "${START_SERVICE}" = "1" ]; then
     info "启动 Xray 服务"
-    if rc-service xray status >/dev/null 2>&1; then
-        rc-service xray restart
-    else
-        rc-service xray start
-    fi
+    # 先强制停止（忽略错误），避免 crashed 状态导致 "already been started"
+    rc-service xray stop >/dev/null 2>&1 || true
+    rc-service xray start
     rc-service xray status
 else
     info "已跳过启动（XRAY_START_SERVICE=0）"
