@@ -1,105 +1,109 @@
-# Alpine LXC 安装 Xray VLESS Reality
+# Alpine LXC 安装 Xray-core
 
-`install-xray.sh` 适用于 Alpine/OpenRC LXC 容器，用于一键安装 Xray VLESS Reality。目标环境可以是 128 MB 内存左右的轻量容器。
+`install.sh` 将两种安装方式合并为同一个入口：
 
-## 功能
+1. 同目录存在 `config.json` 时，校验并部署该配置，不进入交互。
+2. 同目录不存在 `config.json` 时，通过交互引导生成 VLESS Reality 配置。
+3. 无配置文件但传入生成参数时，以非交互方式生成配置，适合自动化部署。
 
-- 从 Xray 官方 GitHub Release 下载并安装 Xray core。
-- 创建 OpenRC 服务，适配 Alpine/LXC 环境。
-- 自动生成 VLESS Reality 所需的 x25519 密钥和 shortId。
-- 支持多个 VLESS 客户端。
-- 支持多个 SOCKS 出站。
-- 支持按 VLESS 客户端 email 将不同客户端路由到不同出站。
-- 阻断 BitTorrent 流量，降低代理被滥用风险。
+脚本仅支持 Alpine Linux 和 OpenRC，需要使用 root 用户运行。Xray 内核、配置、
+数据文件和日志统一安装到 `/opt/xray/`。
 
-## 支持环境
+## 直接使用 config.json
 
-- Alpine Linux
-- OpenRC
-- 支持 `apk` 包管理器
-- 支持架构：`x86_64`、`aarch64/arm64`、`armv7l`
-
-脚本需要 `root` 权限，并会安装 `ca-certificates`、`curl`、`unzip`。
-
-## 使用方式
-
-查看帮助：
+将配置和脚本放在同一个目录后执行：
 
 ```sh
-sudo sh install-xray.sh --help
+chmod +x install.sh
+./install.sh
 ```
 
-示例：创建两个 VLESS 客户端，并分别路由到不同 SOCKS 出站：
+也可以显式指定其他配置文件：
 
 ```sh
-sudo sh install-xray.sh \
-  --port 443 \
-  --server-name www.oracle.com,oracle.com \
-  --dest www.oracle.com:443 \
-  --socks hk:127.0.0.1:1080:user1:pass1 \
-  --socks jp:10.0.0.2:1080:user2:pass2 \
-  --client alice:auto:hk \
-  --client bob:auto:jp
+./install.sh --config /path/to/config.json
 ```
 
-如果需要固定 Xray 版本，避免每次安装取到不同版本：
+配置文件模式会先使用刚下载的 Xray 内核校验配置，校验成功后才会部署。已有配置
+发生变化时会备份为 `/opt/xray/config.json.bak`。
+
+## 交互生成配置
+
+确认脚本同目录没有 `config.json`，直接运行：
 
 ```sh
-sudo sh install-xray.sh --version v25.6.8 ...
+./install.sh
 ```
 
-安装完成后，脚本会输出每个客户端的 VLESS Reality URI。将 URI 导入支持 VLESS Reality 的客户端即可使用。
+脚本会依次询问监听地址、端口、Reality 域名和目标地址，并引导添加 SOCKS 出站
+及 VLESS 客户端。UUID、Reality 密钥和 shortId 均可自动生成。安装完成后会输出
+每个客户端的 VLESS URI。
 
-## 参数说明
+## 使用参数生成配置
 
-| 参数 | 说明 | 默认值 |
-| --- | --- | --- |
-| `--port PORT` | VLESS Reality 入站监听端口。 | `443` |
-| `--listen IP` | 监听地址。 | `0.0.0.0` |
-| `--server-name DOMAIN[,DOMAIN]`、`--sni DOMAIN[,DOMAIN]` | Reality SNI/serverNames，可用英文逗号填写多个。 | `www.oracle.com,oracle.com` |
-| `--dest HOST:PORT` | Reality 回落目标，通常与 `--server-name` 对应。 | `www.oracle.com:443` |
-| `--short-id HEX` | Reality shortId，必须是十六进制字符串。 | 随机 8 字节十六进制 |
-| `--version VERSION` | Xray 版本，例如 `v25.6.8`。 | `latest` |
-| `--socks TAG:HOST:PORT[:USER:PASS]` | 添加一个 SOCKS 出站，`TAG` 用于路由引用；用户名密码可省略。 | 必填，至少一个 |
-| `--client EMAIL:UUID:OUTBOUND` | 添加 VLESS 客户端，并将该客户端路由到指定出站；`UUID` 可写 `auto` 自动生成。 | 必填，至少一个 |
-| `--route EMAIL:OUTBOUND` | 添加或覆盖某个客户端的路由规则。通常 `--client` 中已指定出站时不需要额外填写。 | 无 |
-| `-h`、`--help` | 显示帮助信息。 | 无 |
+生成模式保留了旧脚本的多客户端、多端口、SOCKS 出站和按用户路由能力。以下示例
+使用项目规定的占位地址和凭据：
 
-## 参数格式
-
-SOCKS 出站格式：
-
-```text
-TAG:HOST:PORT
-TAG:HOST:PORT:USER:PASS
+```sh
+./install.sh \
+  --server-name www.example.com,example.com \
+  --dest www.example.com:443 \
+  --socks proxy:10.0.0.1:1080:admin:admin \
+  --client admin:auto:proxy:443
 ```
 
-客户端格式：
+添加默认走直连的客户端：
 
-```text
-EMAIL:UUID:OUTBOUND
+```sh
+./install.sh --vless admin:auto:443
 ```
 
-- `EMAIL` 用于 Xray 用户标识和路由匹配，只允许字母、数字、下划线、点、`@`、`+`、`-`。
-- `UUID` 可以填写已有 UUID，也可以填写 `auto` 自动生成。
-- `OUTBOUND` 必须对应某个 `--socks` 的 `TAG`。
+如果客户端参数和 `--port` 都没有指定端口，脚本会从 `10000-50000` 中随机分配。
+完整参数请运行：
 
-## 配置结果
+```sh
+./install.sh --help
+```
 
-脚本会写入：
+> 同目录已有 `config.json` 时不能使用配置生成参数，避免误覆盖现有配置。请先移走
+> 配置文件，或直接使用配置文件模式。
 
-- Xray 二进制：`/usr/local/bin/xray`
-- Xray 配置：`/usr/local/etc/xray/config.json`
+## 版本和服务启动
+
+固定 Xray 版本：
+
+```sh
+./install.sh --version v26.3.27
+```
+
+仅安装、不立即启动：
+
+```sh
+./install.sh --no-start
+```
+
+仍然兼容环境变量：
+
+```sh
+XRAY_VERSION=v26.3.27 XRAY_START_SERVICE=0 ./install.sh
+```
+
+## 安装结果
+
+- Xray 内核：`/opt/xray/bin/xray`
+- Xray 配置：`/opt/xray/config.json`
+- Geo 数据：`/opt/xray/share/`
+- 日志目录：`/opt/xray/log/`
 - OpenRC 服务：`/etc/init.d/xray`
-- 日志目录：`/var/log/xray`
 
-常用命令：
+常用管理命令：
 
 ```sh
 rc-service xray status
 rc-service xray restart
-xray test -config /usr/local/etc/xray/config.json
+rc-service xray stop
+/opt/xray/bin/xray run -test -config /opt/xray/config.json
 ```
 
-如果服务器安全组或系统防火墙未放行 `--port` 指定的端口，客户端将无法连接。
-
+部署配置的权限为 `600`。请勿将含有 Reality 私钥、UUID 或上游代理凭据的
+`config.json` 提交到仓库。
