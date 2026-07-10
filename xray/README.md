@@ -11,7 +11,22 @@
 
 ## 直接使用 config.json
 
-将配置和脚本放在同一个目录后执行：
+项目目录：[github.com/mrwhh/vps-script/tree/main/xray](https://github.com/mrwhh/vps-script/tree/main/xray)。
+
+在 VPS 上可以先进入 `config.json` 所在目录，再通过 `curl` 或 `wget` 下载脚本：
+
+```sh
+cd /path/to/xray
+curl -fL -o install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh
+# 或：wget -O install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh
+chmod +x install.sh
+./install.sh
+```
+
+如果配置文件还没有上传，可以先创建目录并上传自己的 `config.json`，再执行上面的
+下载命令。脚本和 `config.json` 必须位于同一目录，脚本才会自动进入配置文件模式。
+
+也可以直接使用本地脚本：
 
 ```sh
 chmod +x install.sh
