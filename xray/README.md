@@ -17,9 +17,8 @@
 
 ```sh
 mkdir -p /opt/xray && cd /opt/xray
-curl -fL -o install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh
-# 或：wget -O install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh
-chmod +x install.sh
+curl -fL -o install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh && chmod +x install.sh
+# 或：wget -O install.sh https://raw.githubusercontent.com/mrwhh/vps-script/main/xray/install.sh && chmod +x install.sh
 ./install.sh
 ```
 
