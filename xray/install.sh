@@ -7,12 +7,13 @@
 set -eu
 
 readonly REPOSITORY="XTLS/Xray-core"
+readonly SCRIPT_VERSION="1.2.0"
 readonly XRAY_HOME="/opt/xray"
 readonly INSTALL_DIR="${XRAY_HOME}/bin"
 readonly CONFIG_DIR="${XRAY_HOME}"
 readonly DATA_DIR="${XRAY_HOME}/share"
 readonly LOG_DIR="${XRAY_HOME}/log"
-readonly CONFIG_FILE="${CONFIG_DIR}/config.json"
+readonly CONFIG_FILE="${CONFIG_DIR}/default.json"
 readonly XRAY_BIN="${INSTALL_DIR}/xray"
 readonly SERVICE_FILE="/etc/init.d/xray"
 
@@ -47,6 +48,17 @@ info() {
 fatal() {
     printf '%s\n' "[xray] ERROR: $*" >&2
     exit 1
+}
+
+print_banner() {
+    printf '\n'
+    printf '  ╔══════════════════════════════════════════╗\n'
+    printf '  ║       Xray-core 安装脚本                 ║\n'
+    printf '  ║  Alpine Linux / OpenRC 专用              ║\n'
+    printf '  ║  脚本版本：v%-29s║\n' "${SCRIPT_VERSION}"
+    printf '  ║  上游仓库：%-30s║\n' "${REPOSITORY}"
+    printf '  ╚══════════════════════════════════════════╝\n'
+    printf '\n'
 }
 
 cleanup() {
@@ -382,6 +394,8 @@ normalize_and_validate_generation() {
     fi
 }
 
+print_banner
+
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xray-install.XXXXXX")
 CLIENTS_FILE="${TMP_DIR}/clients"
 SOCKS_FILE="${TMP_DIR}/socks"
@@ -645,20 +659,21 @@ mkdir -p "${INSTALL_DIR}"
 if [ -x "${XRAY_BIN}" ]; then
     cp -p "${XRAY_BIN}" "${TMP_DIR}/xray.previous"
 fi
-if [ -f "${CONFIG_FILE}" ]; then
+# 备份旧的已安装可执行文件与配置（仅 generate 模式下 default.json 才需备份；
+# config 模式下 default.json 是上次生成的临时产物，无需保留）
+if [ -f "${CONFIG_FILE}" ] && [ "${MODE}" = "generate" ]; then
     cp -p "${CONFIG_FILE}" "${TMP_DIR}/config.previous"
-    if ! cmp -s "${CONFIG_SOURCE}" "${CONFIG_FILE}"; then
-        install -m 0600 "${CONFIG_FILE}" "${CONFIG_FILE}.bak"
-    fi
 fi
 
 if [ "${XRAY_WAS_RUNNING}" = "1" ]; then
     info "停止现有 Xray 实例"
     rc-service xray stop
-    if [ "${CONFIG_EXPLICIT}" = "0" ] && [ -f "${CONFIG_FILE}" ]; then
-        info "未指定配置文件，清理现有 Xray 配置"
-        rm -f "${CONFIG_FILE}"
-    fi
+fi
+
+# generate 模式：无论 xray 是否在运行，都删除旧的生成配置，确保重装时完整重新生成
+if [ "${MODE}" = "generate" ] && [ -f "${CONFIG_FILE}" ]; then
+    info "清理旧的生成配置文件：${CONFIG_FILE}"
+    rm -f "${CONFIG_FILE}"
 fi
 
 install -m 0755 "${TMP_DIR}/unpack/xray" "${XRAY_BIN}"
@@ -673,7 +688,7 @@ cat >"${TMP_DIR}/xray.init" <<'EOF'
 name="Xray"
 description="XTLS/Xray-core service"
 command="/opt/xray/bin/xray"
-command_args="run -config /opt/xray/config.json"
+command_args="run -config /opt/xray/default.json"
 command_background="yes"
 pidfile="/run/xray.pid"
 output_log="/opt/xray/log/access.log"
@@ -687,7 +702,7 @@ depend() {
 
 start_pre() {
     checkpath --directory --mode 0755 /opt/xray/log
-    "${command}" run -test -config /opt/xray/config.json
+    "${command}" run -test -config /opt/xray/default.json
 }
 EOF
 install -m 0755 "${TMP_DIR}/xray.init" "${SERVICE_FILE}"
@@ -698,9 +713,10 @@ if ! XRAY_LOCATION_ASSET="${DATA_DIR}" "${XRAY_BIN}" run -test -config "${CONFIG
     else
         rm -f "${XRAY_BIN}"
     fi
-    if [ -f "${TMP_DIR}/config.previous" ]; then
+    # generate 模式下才有 config.previous 备份，恢复旧的 default.json
+    if [ "${MODE}" = "generate" ] && [ -f "${TMP_DIR}/config.previous" ]; then
         install -m 0600 "${TMP_DIR}/config.previous" "${CONFIG_FILE}"
-    else
+    elif [ "${MODE}" = "generate" ]; then
         rm -f "${CONFIG_FILE}"
     fi
     if [ "${XRAY_WAS_RUNNING}" = "1" ]; then
