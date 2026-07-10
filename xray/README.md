@@ -61,8 +61,8 @@ chmod +x install.sh
 
 ```sh
 ./install.sh \
-  --server-name www.example.com,example.com \
-  --dest www.example.com:443 \
+  --server-name www.oracle.com,oracle.com \
+  --dest www.oracle.com:443 \
   --socks proxy:10.0.0.1:1080:admin:admin \
   --client admin:auto:proxy:443
 ```
